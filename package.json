@@ -1,0 +1,17 @@
+{
+  "name": "open-search",
+  "version": "1.0.0",
+  "main": "mappings.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@opensearch-project/opensearch": "^1.2.0",
+    "aws-sdk": "^2.1692.0",
+    "dotenv": "^16.4.7"
+  }
+}
