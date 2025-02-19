@@ -13,32 +13,6 @@ const getClient = () => {
   return client;
 };
 
-// just get indexed fields
-const processANSObject = (ansObject) => {
-  return {
-    _id: ansObject._id,
-    display_date: ansObject.display_date || ansObject.created_date, // incase its not published
-    type: ansObject.type,
-    subtype: ansObject.subtype,
-    distributor: ansObject.distributor
-      ? {
-          reference_id: ansObject.distributor.reference_id,
-        }
-      : null,
-    taxonomy: {
-      sections:
-        ansObject.taxonomy?.sections?.map((section) => ({
-          _id: section._id,
-        })) || [],
-      tags:
-        ansObject.taxonomy?.tags?.map((tag) => ({
-          text: tag.text,
-          slug: tag.slug,
-        })) || [],
-    },
-  };
-};
-
 const handleComposerEvent = async (event, opensearchClient) => {
   const { type: eventType, payload: ansObject } = event;
   const indexName = process.env.OPENSEARCH_INDEX;
@@ -46,44 +20,86 @@ const handleComposerEvent = async (event, opensearchClient) => {
   switch (eventType) {
     case "story.update":
     case "story.publish": {
-      const processedDocument = processANSObject(ansObject);
+      if (!ansObject || !ansObject._id) {
+        throw new Error("Invalid ANS object: missing _id field");
+      }
+
+      // new copy of object without content_elements
+      const { content_elements, ...ansToIndex } = ansObject;
+      console.log(
+        `Preparing to index document ${ansObject._id} without content_elements`,
+      );
+
       await opensearchClient.index({
         index: indexName,
-        id: processedDocument._id,
-        body: processedDocument,
+        id: ansObject._id,
+        body: ansToIndex,
         refresh: true,
       });
-      break;
+
+      console.log(`Indexed document with ID ${ansObject._id}`);
+      return { status: "success", operation: "index", id: ansObject._id };
     }
 
     case "story.unpublish":
     case "story.delete": {
+      if (!ansObject || !ansObject._id) {
+        throw new Error(
+          "Invalid ANS object for delete operation: missing _id field",
+        );
+      }
+
       await opensearchClient.delete({
         index: indexName,
         id: ansObject._id,
         refresh: true,
       });
-      break;
+
+      console.log(`Deleted document with ID ${ansObject._id}`);
+      return { status: "success", operation: "delete", id: ansObject._id };
     }
 
     default:
+      const errorMessage = `Unsupported event type: ${eventType}`;
+      console.error(errorMessage);
+      throw new Error(errorMessage);
   }
 };
 
 exports.handler = async (event, context) => {
   try {
+    console.log("Received event:", JSON.stringify(event, null, 2));
+
     const opensearchClient = getClient();
-    await handleComposerEvent(event, opensearchClient);
+
+    const result = await handleComposerEvent(event, opensearchClient);
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         message: "Successfully processed event",
-        documentId: event.payload._id,
+        result,
       }),
     };
   } catch (error) {
     console.error("Error processing event:", error);
+
+    if (
+      error.meta &&
+      error.meta.body &&
+      error.meta.body.error &&
+      error.meta.body.error.type === "index_not_found_exception"
+    ) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          message:
+            "Index does not exist. Please create the index before processing events.",
+          error: error.message,
+        }),
+      };
+    }
+
     return {
       statusCode: 500,
       body: JSON.stringify({
