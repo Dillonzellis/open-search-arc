@@ -13,50 +13,74 @@ const getClient = () => {
   return client;
 };
 
+const validateAnsObject = (ansObject, operation) => {
+  if (!ansObject || !ansObject._id) {
+    throw new Error(
+      `Invalid ANS object for ${operation} operation: missing _id field`,
+    );
+  }
+  return true;
+};
+
 const handleComposerEvent = async (event, opensearchClient) => {
   const { type: eventType, payload: ansObject } = event;
   const indexName = process.env.OPENSEARCH_INDEX;
 
+  console.log(
+    `Processing ${eventType} event for document ${ansObject?._id || "unknown"}`,
+  );
+
   switch (eventType) {
     case "story.update":
     case "story.publish": {
-      if (!ansObject || !ansObject._id) {
-        throw new Error("Invalid ANS object: missing _id field");
-      }
+      validateAnsObject(ansObject, "index");
 
-      // new copy of object without content_elements
+      // make new document without content_elements
       const { content_elements, ...ansToIndex } = ansObject;
+
       console.log(
-        `Preparing to index document ${ansObject._id} without content_elements`,
+        `Indexing document ${ansObject._id} (${ansToIndex.headlines?.basic || "no title"}) without content_elements`,
       );
 
-      await opensearchClient.index({
+      const response = await opensearchClient.index({
         index: indexName,
         id: ansObject._id,
         body: ansToIndex,
         refresh: true,
       });
 
-      console.log(`Indexed document with ID ${ansObject._id}`);
-      return { status: "success", operation: "index", id: ansObject._id };
+      console.log(
+        `Successfully indexed document with ID ${ansObject._id}, result: ${response.result}`,
+      );
+      return {
+        status: "success",
+        operation: "index",
+        id: ansObject._id,
+        result: response.result,
+      };
     }
 
     case "story.unpublish":
     case "story.delete": {
-      if (!ansObject || !ansObject._id) {
-        throw new Error(
-          "Invalid ANS object for delete operation: missing _id field",
-        );
-      }
+      validateAnsObject(ansObject, "delete");
 
-      await opensearchClient.delete({
+      console.log(`Deleting document with ID ${ansObject._id}`);
+
+      const response = await opensearchClient.delete({
         index: indexName,
         id: ansObject._id,
         refresh: true,
       });
 
-      console.log(`Deleted document with ID ${ansObject._id}`);
-      return { status: "success", operation: "delete", id: ansObject._id };
+      console.log(
+        `Successfully deleted document with ID ${ansObject._id}, result: ${response.result}`,
+      );
+      return {
+        status: "success",
+        operation: "delete",
+        id: ansObject._id,
+        result: response.result,
+      };
     }
 
     default:
@@ -71,7 +95,6 @@ exports.handler = async (event, context) => {
     console.log("Received event:", JSON.stringify(event, null, 2));
 
     const opensearchClient = getClient();
-
     const result = await handleComposerEvent(event, opensearchClient);
 
     return {
@@ -84,20 +107,34 @@ exports.handler = async (event, context) => {
   } catch (error) {
     console.error("Error processing event:", error);
 
-    if (
-      error.meta &&
-      error.meta.body &&
-      error.meta.body.error &&
-      error.meta.body.error.type === "index_not_found_exception"
-    ) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({
-          message:
-            "Index does not exist. Please create the index before processing events.",
-          error: error.message,
-        }),
-      };
+    // Handle specific OpenSearch errors
+    if (error.meta?.body?.error) {
+      const errorType = error.meta.body.error.type;
+      console.error(`OpenSearch error type: ${errorType}`);
+
+      if (errorType === "index_not_found_exception") {
+        return {
+          statusCode: 500,
+          body: JSON.stringify({
+            message:
+              "Index does not exist. Please create the index before processing events.",
+            error: error.message,
+            errorType,
+          }),
+        };
+      }
+
+      if (errorType === "mapper_parsing_exception") {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({
+            message: "Document structure doesn't match index mappings.",
+            error: error.message,
+            errorType,
+            reason: error.meta.body.error.reason,
+          }),
+        };
+      }
     }
 
     return {

@@ -10,9 +10,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/credential-provider-node": "^3.750.0",
+    "@aws-sdk/signature-v4": "^3.374.0",
     "@opensearch-project/opensearch": "^1.2.0",
     "aws-sdk": "^2.1692.0",
-    "axios": "^1.7.9",
     "dotenv": "^16.4.7"
   }
 }
